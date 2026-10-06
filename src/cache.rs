@@ -91,6 +91,12 @@ impl DdcCache {
         true
     }
 
+    /// El trabajo no llegó a terminar (se cayó el hilo): no se guarda nada y
+    /// la próxima consulta vuelve a intentar.
+    pub fn abandon(&mut self, _job: &Job) {
+        self.busy = false;
+    }
+
     /// Cambiaron los monitores. Devuelve si alguien llegó a preguntar alguna
     /// vez: si nadie lo hizo, no vale la pena buscar hasta que pregunten.
     pub fn invalidate(&mut self) -> bool {
@@ -571,6 +577,20 @@ mod tests {
         let again = cache.begin(now, false).expect("hay que buscar de nuevo");
         assert_eq!(again.known, None);
         assert!(cache.finish(&again, Snapshot::default(), now));
+    }
+
+    #[test]
+    fn un_trabajo_caido_no_se_guarda_y_se_reintenta() {
+        let mut cache = DdcCache::default();
+        let now = Instant::now();
+        let job = cache.begin(now, false).unwrap();
+        cache.abandon(&job);
+        assert_eq!(
+            cache.report().1.state,
+            DdcState::Detecting,
+            "no se lo da por listo y vacío"
+        );
+        assert_eq!(cache.begin(now, false).unwrap().known, None);
     }
 
     #[test]

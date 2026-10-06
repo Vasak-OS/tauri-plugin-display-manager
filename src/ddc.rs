@@ -29,10 +29,13 @@
 
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
-use std::io;
+use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use crate::{Error, Result};
 
@@ -190,17 +193,61 @@ pub fn to_percent(current: u16, max: u16) -> u8 {
     ((u32::from(current) * 100 + u32::from(max) / 2) / u32::from(max)).min(100) as u8
 }
 
+/// Cuánto se le deja a ddcutil antes de matarlo. Un monitor sin DDC/CI tardó
+/// 3,4–4 s en fallar en la máquina de desarrollo (ddcutil reintenta); un bus
+/// colgado podría no volver nunca, y mientras tanto tendría tomado el turno de
+/// DDC/CI y la búsqueda en curso.
+pub const DDCUTIL_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Corre ddcutil y devuelve su salida. Bloquea: se llama desde
 /// `spawn_blocking`, nunca desde el hilo de la interfaz.
 pub fn run(program: &Path, args: &[String]) -> Result<String> {
-    let output = Command::new(program)
+    run_with_timeout(program, args, DDCUTIL_TIMEOUT)
+}
+
+fn read_all(pipe: Option<impl Read>) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    if let Some(mut pipe) = pipe {
+        let _ = pipe.read_to_end(&mut buffer);
+    }
+    buffer
+}
+
+/// Como [`run`], con un plazo. Sin sondeo: un hilo lee las dos salidas hasta
+/// el final —que llega cuando el proceso termina— y este espera ese aviso con
+/// plazo. Si se vence, mata el proceso, y eso cierra las salidas y suelta al
+/// hilo lector.
+pub fn run_with_timeout(program: &Path, args: &[String], timeout: Duration) -> Result<String> {
+    let mut child = Command::new(program)
         .args(args)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| Error::Ddcutil(e.to_string()))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        // Las dos a la vez: leer una entera antes de la otra puede trabar al
+        // proceso si llena la segunda.
+        let errors = thread::spawn(move || read_all(stderr));
+        let output = read_all(stdout);
+        let errors = errors.join().unwrap_or_default();
+        let _ = done.send((output, errors));
+    });
+
+    let Ok((stdout, stderr)) = finished.recv_timeout(timeout) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(Error::Ddcutil(format!("no answer after {timeout:?}")));
+    };
+    let status = child.wait().map_err(|e| Error::Ddcutil(e.to_string()))?;
+
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr);
+        let stdout = String::from_utf8_lossy(&stdout);
         let reason = if stderr.trim().is_empty() {
             stdout.trim().to_string()
         } else {
@@ -209,7 +256,7 @@ pub fn run(program: &Path, args: &[String]) -> Result<String> {
         return Err(Error::Ddcutil(reason));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
 #[cfg(test)]
@@ -349,6 +396,44 @@ Invalid display
             find_in_path("ddcutil", Some(OsString::from("relative/bin"))),
             None,
             "una ruta relativa en PATH no se sigue"
+        );
+    }
+
+    fn sh(script: &str) -> Vec<String> {
+        vec!["-c".into(), script.into()]
+    }
+
+    #[test]
+    fn devuelve_la_salida_o_el_error() {
+        let sh_path = Path::new("/bin/sh");
+        assert_eq!(
+            run(sh_path, &sh("echo VCP 10 C 45 100")).unwrap(),
+            "VCP 10 C 45 100\n"
+        );
+        assert!(matches!(
+            run(sh_path, &sh("echo 'DDC communication failed' >&2; exit 1")),
+            Err(Error::Ddcutil(m)) if m == "DDC communication failed"
+        ));
+        assert!(matches!(
+            run(sh_path, &sh("echo 'sólo stdout'; exit 1")),
+            Err(Error::Ddcutil(m)) if m == "sólo stdout"
+        ));
+        assert!(run(Path::new("/nonexistent/ddcutil"), &[]).is_err());
+    }
+
+    #[test]
+    fn un_ddcutil_colgado_se_corta_al_vencer_el_plazo() {
+        let started = std::time::Instant::now();
+        let result = run_with_timeout(
+            Path::new("/bin/sh"),
+            &sh("sleep 30"),
+            Duration::from_millis(200),
+        );
+        assert!(matches!(result, Err(Error::Ddcutil(m)) if m.contains("no answer")));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "no esperó al proceso: {:?}",
+            started.elapsed()
         );
     }
 

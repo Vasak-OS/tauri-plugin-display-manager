@@ -10,7 +10,7 @@ use tokio::sync::OnceCell;
 use zbus::Connection;
 
 use crate::backlight::{self, BACKLIGHT_ROOT};
-use crate::cache::{self, DdcCache, Job, Probe, Snapshot};
+use crate::cache::{self, DdcCache, Job, Probe};
 use crate::ddc;
 use crate::drm::{self, Connector, DRM_ROOT};
 use crate::models::{BrightnessKind, BrightnessReport, MonitorBrightness};
@@ -208,10 +208,20 @@ impl DisplayManager {
                     cache::run(&probe_job, &probe)
                 })
                 .await
-                .unwrap_or_else(|e| {
+            };
+
+            let snapshot = match snapshot {
+                Ok(snapshot) => snapshot,
+                Err(e) => {
+                    // Un resultado vacío se leería como «no hay monitores
+                    // externos» durante un minuto. Se descarta, y la próxima
+                    // consulta vuelve a buscar.
                     log::warn!("display-manager: la búsqueda de monitores se cayó: {e}");
-                    Snapshot::default()
-                })
+                    if let Ok(mut cache) = self.inner.cache.lock() {
+                        cache.abandon(&job);
+                    }
+                    break;
+                }
             };
 
             let next = {

@@ -113,6 +113,7 @@ const report = await getBrightness();
 
 const unlisten = await onBrightnessChanged((next) => { /* … */ });
 
+// `handle` sale del informe: el bus i2c en un monitor externo.
 await setBrightness('ddc', '5', 70);
 
 const night = await getNightLight();
@@ -122,7 +123,7 @@ await setNightLight({ ...night.config, nightTemperature: 3500 });
 | Comando | Devuelve |
 |---|---|
 | `get_brightness` | `BrightnessReport` |
-| `set_brightness(kind, handle, percent)` | — |
+| `set_brightness(kind, handle, percent)` | — (`handle` es el de `MonitorBrightness`: el nombre de la retroiluminación, como `intel_backlight`, o el número de bus i2c del monitor externo, como `"5"` para `/dev/i2c-5`) |
 | `refresh_brightness` | — (el resultado llega por el evento) |
 | `get_night_light` | `NightLight` |
 | `set_night_light(config)` | `NightLight` |
