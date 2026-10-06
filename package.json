@@ -1,0 +1,45 @@
+{
+  "name": "@vasakgroup/plugin-display-manager",
+  "version": "2.0.0",
+  "author": "Joaquin (Pato) Decima <jdecima@vasak.net.ar>",
+  "description": "A Tauri plugin for per-monitor brightness (backlight through sysfs and logind, external screens through DDC/CI) and night light settings on Linux.",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vasak-OS/tauri-plugin-display-manager.git"
+  },
+  "type": "module",
+  "types": "./dist-js/index.d.ts",
+  "main": "./dist-js/index.cjs",
+  "module": "./dist-js/index.js",
+  "exports": {
+    "types": "./dist-js/index.d.ts",
+    "import": "./dist-js/index.js",
+    "require": "./dist-js/index.cjs"
+  },
+  "files": [
+    "dist-js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rollup -c",
+    "test": "bun test",
+    "prepublishOnly": "bun run build",
+    "pretest": "bun run build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.1"
+  },
+  "devDependencies": {
+    "@rollup/plugin-typescript": "^12.3.0",
+    "rollup": "^4.63.5",
+    "typescript": "^5.9.3",
+    "tslib": "^2.8.1"
+  },
+  "vasak": {
+    "bibliotecasAtrasadas": {
+      "typescript": "Se queda en la 5.9: la 7.0 es el compilador nativo y no trae la API de JavaScript que @rollup/plugin-typescript usa para emitir. Sale cuando @rollup/plugin-typescript soporte TypeScript 7.",
+      "zbus (crate de Rust)": "Se queda en la 4: la 5 cambia la API de proxies y conexiones, y vasak-settings, tauri-plugin-network-manager y tauri-plugin-bluetooth-manager siguen en la 4; subirla sola deja dos zbus en el binario de cada aplicación. Sale cuando el taller pase junto a la 5."
+    }
+  }
+}

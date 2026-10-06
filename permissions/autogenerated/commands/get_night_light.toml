@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-get-night-light"
+description = "Enables the get_night_light command without any pre-configured scope."
+commands.allow = ["get_night_light"]
+
+[[permission]]
+identifier = "deny-get-night-light"
+description = "Denies the get_night_light command without any pre-configured scope."
+commands.deny = ["get_night_light"]

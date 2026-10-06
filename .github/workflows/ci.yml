@@ -1,0 +1,59 @@
+# Los chequeos viven en el repositorio `.github` de la organización, así que
+# acá sólo se los llama. Cambiarlos es cambiarlos en un solo lugar.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  app:
+    # Sólo lectura. Estos chequeos clonan, instalan dependencias y comprueban:
+    # no comentan, no etiquetan, no publican.
+    #
+    # El workflow llamado declara lo mismo en su trabajo, que es donde el
+    # permiso se aplica; esto lo escribe también acá porque el análisis
+    # estático de este repositorio no puede ver el otro archivo, y ahí un
+    # trabajo sin `permissions` se lee como permisos por omisión.
+    permissions:
+      contents: read
+    uses: Vasak-OS/.github/.github/workflows/app.yml@main
+    with:
+      # Las pruebas de Rust corren desde el primer día: un plugin de Tauri
+      # arrastra webkit2gtk, así que hace falta la lista de `libwebkit2gtk-4.1-dev`
+      # más el compilador de C, igual que en tauri-plugin-bluetooth-manager.
+      pruebas_rust: -p tauri-plugin-display-manager
+      paquetes_rust: libwebkit2gtk-4.1-dev build-essential
+      # Nace al día: que no se quede atrás sin que nadie lo vea.
+      bibliotecas_cortan: true
+      candado_corta: true
+    # Sólo el token de SonarQube Cloud, y por nombre: `secrets: inherit`
+    # le daría también el de crates.io y el de npm a un trabajo que
+    # instala dependencias de terceros.
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # La publicación, compartida con los demás plugins. Va después de los
+  # chequeos y sólo en `main`: publicar algo que no pasó las comprobaciones es
+  # peor que no publicar, y de crates.io no se puede borrar una versión.
+  #
+  # **Apagada hasta que se confirme la primera publicación.** Los dos tokens
+  # son de la organización, así que sin esta condición el merge del primer PR
+  # publicaría la 2.0.0 en crates.io y en npm en el acto. Se enciende con
+  #
+  #   gh variable set PUBLICAR --body true --repo Vasak-OS/tauri-plugin-display-manager
+  #
+  # y a partir de ahí es como en el resto: sube cuando la versión del
+  # manifiesto no está en el registro.
+  publicar:
+    needs: app
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.PUBLICAR == 'true'
+    permissions:
+      contents: read
+    uses: Vasak-OS/.github/.github/workflows/publicar-plugin.yml@main
+    # Los dos secretos por nombre y no `inherit`: lo que necesita para
+    # publicar son estos dos.
+    secrets:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
