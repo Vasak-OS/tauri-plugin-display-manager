@@ -1,0 +1,40 @@
+[package]
+name = "tauri-plugin-display-manager"
+version = "2.0.0"
+authors = [ "Joaquin (Pato) Decima <jdecima@vasak.net.ar>", "Vasak Group" ]
+description = "A Tauri plugin for per-monitor brightness (backlight through sysfs and logind, external screens through DDC/CI) and night light settings on Linux."
+edition = "2021"
+rust-version = "1.90"
+exclude = ["/examples", "/dist-js", "/guest-js", "/node_modules"]
+links = "tauri-plugin-display-manager"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Vasak-OS/tauri-plugin-display-manager"
+keywords = ["tauri", "tauri-plugin", "brightness", "ddc", "linux"]
+
+[dependencies]
+tauri = { version = "2" }
+# Sin las características por omisión: traen `async-io`, un segundo ejecutor
+# al lado del tokio que ya corre Tauri. Es la misma elección que hace
+# vasak-settings, así que en el binario queda una sola copia.
+zbus = { version = "4", default-features = false, features = ["tokio"] }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2"
+log = "0.4"
+# Ya viene con tauri: esto pide `sync` (OnceCell y Mutex asíncronos).
+tokio = { version = "1", features = ["sync"] }
+# El socket de uevents del kernel (`uevent.rs`), con una API segura y sin
+# `unsafe` propio. La 1.1 ya está en el bloqueo de vasak-settings y de
+# vasak-desktop (la traen tempfile y async-io), así que no suma un crate; esto
+# pide la característica `net`. `fs` va porque rustix 1.1 no compila `net`
+# sola (le falta su módulo `timespec`), y ésa ya la encienden los otros.
+rustix = { version = "1", features = ["net", "fs"] }
+# La carpeta de configuración respetando XDG_CONFIG_HOME, con la misma regla
+# que el resto del taller en vez de una copia a mano.
+dirs = "7"
+
+[dev-dependencies]
+serde_json = "1.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

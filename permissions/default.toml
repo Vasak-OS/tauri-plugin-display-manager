@@ -1,0 +1,9 @@
+[default]
+description = "Leer y cambiar el brillo de las pantallas, y leer y guardar la configuración de la luz nocturna."
+permissions = [
+  "allow-get-brightness",
+  "allow-set-brightness",
+  "allow-refresh-brightness",
+  "allow-get-night-light",
+  "allow-set-night-light"
+]
