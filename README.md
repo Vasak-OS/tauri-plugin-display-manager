@@ -1,148 +1,382 @@
-# tauri-plugin-display-manager
+# Tauri plugin display manager
 
-Plugin de Tauri para el **brillo por monitor** —el panel interno por sysfs y
-logind, los monitores externos por DDC/CI— y la **configuración de la luz
-nocturna** (`wlsunset`).
+Plugin de Tauri para el brillo por monitor (retroiluminación por sysfs y logind, externos por DDC/CI) y la configuración de la luz nocturna. Linux / VasakOS.
 
-Es parte de VasakOS: lo usan `vasak-settings` y el centro de control de
-`vasak-desktop`. Sólo Linux.
+---
 
-## Cómo funciona, y por qué es barato
+## Tecnología
 
-| | cómo | costo medido |
-|---|---|---|
-| Leer el panel interno | `/sys/class/backlight/*/{brightness,max_brightness}` | 0,04 ms |
-| Escribir el panel interno | `SetBrightness` de logind por D-Bus (sin root ni polkit) | un viaje por el bus |
-| Saber qué bus i2c es de qué monitor | el enlace `ddc` de `/sys/class/drm/cardN-*` | 0,15 ms |
-| Leer o escribir un monitor externo | `ddcutil --bus N getvcp/setvcp 10` en segundo plano | ≥ 40 ms (lo pide la norma DDC/CI) + ~8 ms del proceso |
-| Enterarse de un cambio | uevents del kernel por netlink: brillo (`SUBSYSTEM=backlight`) y monitores (`SUBSYSTEM=drm`, `HOTPLUG=1`) | un hilo dormido |
-| `get_brightness` completo | panel desde sysfs + externos desde lo guardado | **0,044 ms** promedio (compilado en release) |
+Uso: generate-readme-badges.sh <tipo>
 
-- **`get_brightness` nunca espera a DDC/CI.** Devuelve lo guardado. La primera
-  vez (o cuando cambian los monitores) los externos vienen con
-  `ddc.state: "detecting"` y llegan después por el evento
-  `display-brightness-changed`.
-- **Sin `ddcutil detect`.** Era lo lento: prueba DDC en todos los buses. El
-  mapa conector → bus sale de sysfs, y cada lectura va con `--bus N`, que
-  saltea la detección. `detect` queda como respaldo para un conector que no
-  publica su bus, una vez, y guardado hasta el próximo cambio de monitores.
-- **Los paneles internos no se prueban por DDC.** No lo hablan, y probarlo
-  tarda segundos en fallar (3,4 s medidos con ddcutil en un eDP).
-- **Sin sondeo.** El kernel avisa cuando cambia el brillo —también desde una
-  tecla u otro programa— y cuando se conecta o desconecta un monitor; eso
-  invalida lo guardado. El brillo de un monitor externo cambiado desde sus
-  propios botones no avisa: se relee si lo guardado tiene más de 60 s cuando
-  alguien pregunta, en segundo plano, o con `refresh_brightness`.
-- **El deslizador no hace cola.** Arrastrarlo pide decenas de valores por
-  segundo; a un monitor externo se le escribe sólo el último.
-- **Lo que no hay se ve «no disponible»,** con un código: `not-installed`
-  (falta ddcutil), `no-i2c-dev` (falta el módulo), `no-permission` (grupo
-  `i2c` o la regla de udev de ddcutil). Un monitor que no contesta DDC/CI va
-  en `ddc.unsupported`. Sin monitores externos no se dice nada: no hace
-  falta ddcutil para una notebook sola.
+Tipos válidos:
+  tauri-vue       Apps Tauri + Vue 3 (Rust, Tauri, Vue 3, TypeScript)
+  rust-service    Servicios Rust systemd/D-Bus (Rust, systemd, D-Bus)
+  cpp-plugin      Plugins C++ Wayfire (C++, Meson, Wayfire)
+  meson-c         Módulos C WirePlumber (C, Meson, WirePlumber)
+  meson-cpp       Plugins C++ genéricos Meson (C++, Meson)
 
-### Por qué `ddcutil` y no `libddcutil`
+Ejemplos:
+  ./generate-readme-badges.sh tauri-vue
+  ./generate-readme-badges.sh rust-service > tech-badges.md
 
-Medido con ddcutil 3.0.2 / libddcutil 5.6.2:
+## Estado
 
-| | costo |
-|---|---|
-| arrancar `ddcutil` y salir | 4–5 ms |
-| `ddcutil --bus N getvcp 10` sin monitor (arranque + inicialización + rechazo) | 8–9 ms |
-| `ddca_init2` de libddcutil, una vez por proceso | 12–15 ms |
-| salir de un proceso que cargó libddcutil | ~490 ms |
-| una transacción DDC/CI | ≥ 40 ms |
+[![CI](https://github.com/Vasak-OS/tauri-plugin-display-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/Vasak-OS/tauri-plugin-display-manager/actions/workflows/ci.yml)
+[![Versión](https://img.shields.io/github/v/release/Vasak-OS/tauri-plugin-display-manager?style=flat&label=Versi%C3%B3n)](https://github.com/Vasak-OS/tauri-plugin-display-manager/releases)
+[![Licencia](https://img.shields.io/github/license/Vasak-OS/tauri-plugin-display-manager?style=flat)](LICENSE)
+[![Cobertura](https://sonarcloud.io/api/project_badges/measure?project=Vasak-OS_tauri-plugin-display-manager&metric=coverage&style=flat)](https://sonarcloud.io/summary/new_code?id=Vasak-OS_tauri-plugin-display-manager)
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=Vasak-OS_tauri-plugin-display-manager&metric=alert_status&style=flat)](https://sonarcloud.io/summary/new_code?id=Vasak-OS_tauri-plugin-display-manager)
+[![Tamaño repo](https://img.shields.io/github/repo-size/Vasak-OS/tauri-plugin-display-manager?style=flat)](https://github.com/Vasak-OS/tauri-plugin-display-manager)
 
-La biblioteca ahorraría unos 8 ms por lectura contra un piso de 40 ms que no
-evita nadie, y a cambio haría de ddcutil una dependencia dura (la aplicación no
-arranca sin `libddcutil.so.5`) y metería `libX11`, `libXrandr`, `libusb`,
-`libjansson` y `libdrm` —sus `NEEDED`— en aplicaciones Wayland que no las
-usan. Con el binario, ddcutil es opcional.
+---
 
-## Luz nocturna
+## Descripción
 
-Sólo la configuración: temperatura de día y de noche, y horario fijo o por
-ubicación. Vive en la línea `ExecStart` de
-`~/.config/systemd/user/vasak-nightlight.service` —la misma unidad que ya
-escribía vasak-settings, así que lo configurado se sigue leyendo—. Encender,
-apagar y recargar el servicio es de quien lo usa; `night_light::wlsunset_args`
-está público para eso.
+Plugin de Tauri para el brillo por monitor (retroiluminación por sysfs y logind, externos por DDC/CI) y la configuración de la luz nocturna. Linux / VasakOS.
 
-Los valores se validan antes de escribirse: terminan en una unidad de systemd,
-y un texto con un salto de línea agregaría directivas. Las horas se reescriben
-como `HH:MM` y las coordenadas son números.
+**Para el usuario:** 
+
+**Integración VasakOS:** Integra con el ecosistema VasakOS vía D-Bus y configuración compartida.
+
+---
+
+## Arquitectura (diagramas)
+
+> Copia y pega la plantilla que necesites, descomenta y adapta.
+
+### Flujo de datos
+
+```mermaid
+<!--
+graph TD
+    A[Entrada: Teclado / Ratón / D-Bus / Sistema] --> B[Procesamiento: Core Rust + Tauri Commands]
+    B --> C[Salida: UI actualizada / Acciones del sistema]
+    style A fill:#e1f5fe
+    style C fill:#e8f5e9
+-->
+```
+
+### Componentes internos
+
+```mermaid
+<!--
+flowchart LR
+    subgraph App[Tauri plugin display manager]
+        UI[Frontend Vue 3 + vue-libvasak]
+        Core[Core Rust: lógica principal]
+        IPC[Tauri Commands / Eventos]
+        System[Systemd / D-Bus / PipeWire / Wayland]
+    end
+    UI --> IPC
+    IPC --> Core
+    Core --> DBus[(D-Bus / zbus)]
+    Core --> System
+    style UI fill:#f3e5f5
+    style Core fill:#e3f2fd
+    style DBus fill:#fff3e0
+    style System fill:#fce4ec
+-->
+```
+
+### Integración en el sistema VasakOS
+
+```mermaid
+<!--
+C4Context
+    title Tauri plugin display manager en VasakOS
+    Person(usuario, "Usuario", "Persona que usa el sistema")
+    System_Boundary(c1, "VasakOS") {
+        System(app, "Tauri plugin display manager", "Plugin de Tauri para el brillo por monitor (retroiluminación por sysfs y logind")
+        System_Ext(settings, "vasak-settings", "Configuración central")
+        System_Ext(keyring, "vasak-keyring", "Secrets y claves")
+        System_Ext(accounts, "vasak-accounts", "Cuentas e identidad")
+        System_Ext(permissions, "vasak-permissions", "Permisos y portales")
+    }
+    System_Ext(systemd, "systemd", "Gestión de servicios")
+    System_Ext(dbus, "D-Bus", "Bus de mensajes del sistema")
+    System_Ext(wayland, "Wayland / Wayfire", "Compositor")
+    System_Ext(pipewire, "PipeWire", "Multimedia")
+    Rel(usuario, app, "Usa")
+    Rel(app, settings, "Lee/escribe config")
+    Rel(app, keyring, "Guarda/lee secrets")
+    Rel(app, accounts, "Identidad de cuenta")
+    Rel(app, permissions, "Solicita permisos")
+    Rel(app, systemd, "Activación / sockets")
+    Rel(app, dbus, "Expone / consume interfaces")
+    Rel(app, wayland, "Superficies / protocolos")
+    Rel(app, pipewire, "Streams de audio/video")
+-->
+```
+
+---
 
 ## Instalación
 
-```toml
-# src-tauri/Cargo.toml
-[dependencies]
-tauri-plugin-display-manager = "2"
+### Arch Linux (repo oficial)
+
+```bash
+pacman -S vasak-tauri-plugin-display-manager
 ```
 
-```sh
-bun add @vasakgroup/plugin-display-manager
+### Debian / Ubuntu (.deb)
+
+```bash
+wget https://github.com/Vasak-OS/tauri-plugin-display-manager/releases/download/v{{VERSION}}/vasak-tauri-plugin-display-manager_{{VERSION}}_amd64.deb
+sudo apt install ./vasak-tauri-plugin-display-manager_{{VERSION}}_amd64.deb
 ```
 
-```rust
-tauri::Builder::default()
-    // Una aplicación que se abre a demanda:
-    .plugin(tauri_plugin_display_manager::init())
-    // El escritorio, que vive toda la sesión, busca los externos al arrancar:
-    // .plugin(tauri_plugin_display_manager::Builder::new().prefetch_ddc(true).build())
+### Desde fuente
+
+```bash
+git clone https://github.com/Vasak-OS/tauri-plugin-display-manager.git
+cd tauri-plugin-display-manager
+
+# Build Rust (plugin Tauri)
+cargo build --release --locked
+
+# Tests
+cargo test --locked
+
+# Publicar (crates.io + npm)
+cargo publish --locked
+npm publish
 ```
 
-```json
-"permissions": ["display-manager:default"]
+### Flatpak / AppImage
+
+> *Placeholder: añadir cuando exista paquete Flatpak o AppImage oficial.*
+
+---
+
+## Uso rápido
+
+```bash
+# Se lanza automáticamente (systemd --user) o manualmente:
+tauri-plugin-display-manager
 ```
 
-## Uso
+### Atajos / flags principales
 
-```ts
-import {
-  getBrightness,
-  setBrightness,
-  onBrightnessChanged,
-  getNightLight,
-  setNightLight,
-} from '@vasakgroup/plugin-display-manager';
+| Acción | Comando / Tecla |
+|--------|-----------------|
+| Acción principal | `tauri-plugin-display-manager` |
+| Configuración | `tauri-plugin-display-manager --config` |
+| Ayuda | `tauri-plugin-display-manager --help` |
 
-const report = await getBrightness();
-// { monitors: [{ output: 'eDP-1', kind: 'backlight', handle: 'intel_backlight', percent: 60 }],
-//   ddc: { state: 'detecting', reason: null, unsupported: [] } }
+> **Captura:** `assets/demo.gif` *(placeholder — sustituir por GIF real)*
 
-const unlisten = await onBrightnessChanged((next) => { /* … */ });
+---
 
-// `handle` sale del informe: el bus i2c en un monitor externo.
-await setBrightness('ddc', '5', 70);
+## Configuración
 
-const night = await getNightLight();
-await setNightLight({ ...night.config, nightTemperature: 3500 });
+### Archivo de configuración
+
+```
+~/.config/vasak/tauri-plugin-display-manager.toml
 ```
 
-| Comando | Devuelve |
-|---|---|
-| `get_brightness` | `BrightnessReport` |
-| `set_brightness(kind, handle, percent)` | — (`handle` es el de `MonitorBrightness`: el nombre de la retroiluminación, como `intel_backlight`, o el número de bus i2c del monitor externo, como `"5"` para `/dev/i2c-5`) |
-| `refresh_brightness` | — (el resultado llega por el evento) |
-| `get_night_light` | `NightLight` |
-| `set_night_light(config)` | `NightLight` |
+### Variables de entorno
 
-## Dependencias en tiempo de ejecución
+| Variable | Descripción | Por defecto |
+|----------|-------------|-------------|
+| `VASAK_DEBUG` | Activa logs de depuración en consola | `false` |
+| `VASAK_PROFILE` | Perfil de rendimiento: `balanced`, `performance`, `power-save` | `balanced` |
 
-- `systemd` (logind) para escribir la retroiluminación.
-- `ddcutil`, **opcional**, para los monitores externos, con el módulo
-  `i2c-dev` cargado y acceso a `/dev/i2c-*`.
-- `wlsunset`, **opcional**, para la luz nocturna.
+### Integración con `tauri-plugin-config-manager`
 
-## Pruebas
+- Esquemas de color: respeta `--ui-primary`, `--ui-surface`, `--ui-focus`, `--ui-on-surface`, `--ui-border`
+- Tema de iconos: usa el tema del sistema (`vasakos-icon-theme`) vía `vicon` lookup
+- Radio de bordes: variable CSS `--ui-radius` del esquema activo (por defecto 12px)
+- Fuentes: `--ui-font-family`, `--ui-font-size-base` desde el esquema
 
-```sh
-cargo test                                         # sin hardware
-cargo test --release -- --ignored --nocapture      # contra esta máquina: mide y escribe en el panel el brillo que ya tiene
-bun run test                                       # el binding de JavaScript
+---
+
+## Desarrollo
+
+### Requisitos
+
+- **Rust:** `rustup` toolchain estable (`rust-toolchain.toml` fija la versión)
+- **Node / bun:** `bun` ≥ 1.1 (nunca npm/yarn/pnpm para apps Tauri)
+- **Sistema:** `pkg-config`, `libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libssl-dev`
+- *`libssl-dev` para TLS, dependencias específicas del plugin*
+
+### Dependencias de desarrollo
+
+#### Sistema (paquetes Arch / Debian / Fedora)
+
+`base-devel`, `pkgconf`, `libssl-dev`, `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`, `libpipewire-0.3-dev`, `libwireplumber-0.5-dev`, `libdbus-1-dev`, `libudev-dev`, `libxkbcommon-dev`, `libwayland-dev`, `meson`, `ninja`, `clang`, `lld`
+
+#### Rust
+
+`rustup` → `stable` + `rustfmt` + `clippy`
+
+#### Node
+
+**Solo `bun`** (nunca npm/yarn/pnpm para apps Tauri). `bun --version` ≥ 1.1
+
+#### Herramientas CLI
+
+`just` (command runner), `cargo-binstall` (opcional), `cargo-llvm-cov` (para cobertura)
+
+### Correr la app en desarrollo
+
+```bash
+# Frontend (Vite dev server + Tauri dev)
+bun run tauri dev
+
+# Solo frontend (Vite)
+bun run dev
+
+# Solo backend (cargo watch)
+cargo watch -x "run --bin tauri-plugin-display-manager"
 ```
+
+### Compilar / Build de release
+
+```bash
+# Build completo (frontend + backend + bundle)
+bun run tauri build
+
+# Solo frontend (para testear bundle después)
+bun run build
+
+# Solo backend Rust (binario optimizado)
+cargo build --release --locked
+
+# Paquetes nativos
+# Arch: makepkg -sf en PKGBUILDS/tauri-plugin-display-manager/
+# Debian: cargo deb --no-build --target-dir src-tauri/target/release/debian
+```
+
+### Targets principales
+
+```bash
+# Desarrollo (Tauri dev server + hot reload)
+bun run dev
+
+# Build producción
+bun run build
+
+# Solo frontend
+bun run build:frontend
+
+# Solo backend Rust
+cargo build --release --locked
+
+# Lint + tipos (pre-commit / CI)
+bunx --bun biome check .
+bunx vue-tsc --noEmit
+cargo fmt --check
+```
+
+### Pruebas
+
+```bash
+# Tests Rust
+cargo test -p tauri-plugin-display-manager --locked
+
+# Tests JS (si tiene bindings)
+bun test
+```
+
+### Convención de commits
+
+[Conventional Commits](https://www.conventionalcommits.org/es/v1.0.0/):
+
+```
+<tipo>(<ámbito>): <descripción corta>
+
+[cuerpo opcional]
+
+[pie opcional: Closes #N]
+```
+
+Tipos habituales: `feat`, `fix`, `bugfix`, `docs`, `ci`, `chore`, `security`, `refactor`, `perf`, `test`.
+
+### Cómo abrir PR
+
+1. Rama desde `origin/main`:
+   ```bash
+   git worktree add -b feat/tema ~/wt/tauri-plugin-display-manager-tema origin/main
+   ```
+2. Prefijos de rama: `fix/`, `feat/`, `bugfix/`, `docs/`, `ci/`, `chore/`, `security/`
+3. Escribe el fix → **`qa` escribe las pruebas** (fallan sin el fix) → suite verde → abre PR
+4. Al abrir PR, **cuatro cosas obligatorias**:
+   - Asignado a `JoaquinDecima`
+   - Etiqueta `enhancement` o `bug` (+ `ci` / `dependencies` si aplica)
+   - Añadido al proyecto «VasakOS Roadmap»
+   - Status **In Progress**
+
+---
+
+## Arquitectura (texto)
+
+### Crates / módulos principales
+
+| `tauri-plugin-display-manager` | Plugin Tauri: Rust backend + JS bindings |
+
+### Interfaces D-Bus / zbus expuestas
+
+| `org.vasak.display-manager` | Métodos específicos del plugin | Funcionalidad expuesta a apps Tauri |
+
+### Puntos de extensión
+
+- **Plugins:** Sistema de plugins modular
+- **Hooks:** Hooks de ciclo de vida
+- **API pública Rust:** API pública del crate principal
+
+### Features / Cargo features
+
+| Feature | Descripción | Default |
+|---------|-------------|---------|
+| `async` | API asíncrona (futures) | ✓ |
+| `blocking` | API bloqueante para compatibilidad | |
+
+Y para apps Tauri+Vue: features del `tauri.conf.json` → `bundle` / `plugins` / `allowlist` (capabilities).
+
+---
+
+## Pruebas y calidad
+
+- **Cobertura objetivo:** ≥ 80 % del código nuevo (SonarCloud Quality Gate)
+- **Informes:** GitHub Actions → pestaña *SonarCloud Code Analysis* → enlace a SonarCloud
+- **Añadir pruebas:** ver `AGENTS.md` sección 9 (mapa de repos y comandos de prueba)
+- **Regla:** toda corrección lleva prueba escrita por `qa` que falla sin el fix
+
+---
+
+## Contribuir
+
+- **Guía:** [.github/CONTRIBUTING.md](https://github.com/Vasak-OS/.github/blob/main/CONTRIBUTING.md)
+- **Plantillas de issue:** [.github/ISSUE_TEMPLATE/](https://github.com/Vasak-OS/.github/tree/main/ISSUE_TEMPLATE)
+- **Código de conducta:** [CODE_OF_CONDUCT.md](https://github.com/Vasak-OS/.github/blob/main/CODE_OF_CONDUCT.md)
+
+---
+
+## Contribuidores
+
+> **Actualizado automáticamente en CI** — muestra los avatares de quienes han aportado código a este repo.
+
+<div align="center">
+  
+</div>
+
+[Ver todos los contribuidores](https://github.com/Vasak-OS/tauri-plugin-display-manager/graphs/contributors)
+
+---
+
+## Donadores / Sponsors
+
+[![Sponsors](https://img.shields.io/github/sponsors/Vasak-OS?style=flat&label=Sponsors)](https://github.com/sponsors/Vasak-OS)
+
+> **Backers:** *Actualizado automáticamente en CI desde GitHub Sponsors / OpenCollective / Polar.*
+
+[💖 Donar al proyecto](https://github.com/sponsors/Vasak-OS)
+
+---
 
 ## Licencia
 
-GPL-3.0-or-later.
+`MIT` — Copyright © 2026 **Vasak-OS Contributors**
+
+[Ver licencia completa](LICENSE)
